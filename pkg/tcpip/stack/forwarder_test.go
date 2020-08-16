@@ -45,6 +45,8 @@ const (
 // use the first three: destination address, source address, and transport
 // protocol. They're all one byte fields to simplify parsing.
 type fwdTestNetworkEndpoint struct {
+	*AddressableEndpointState
+
 	nicID      tcpip.NICID
 	proto      *fwdTestNetworkProtocol
 	dispatcher TransportDispatcher
@@ -52,6 +54,14 @@ type fwdTestNetworkEndpoint struct {
 }
 
 var _ NetworkEndpoint = (*fwdTestNetworkEndpoint)(nil)
+
+func (*fwdTestNetworkEndpoint) Enable() *tcpip.Error {
+	return nil
+}
+
+func (*fwdTestNetworkEndpoint) Disable() *tcpip.Error {
+	return nil
+}
 
 func (f *fwdTestNetworkEndpoint) MTU() uint32 {
 	return f.ep.MTU() - uint32(f.MaxHeaderLength())
@@ -106,7 +116,9 @@ func (*fwdTestNetworkEndpoint) WriteHeaderIncludedPacket(r *Route, pkt *PacketBu
 	return tcpip.ErrNotSupported
 }
 
-func (*fwdTestNetworkEndpoint) Close() {}
+func (f *fwdTestNetworkEndpoint) Close() {
+	f.AddressableEndpointState.RemoveAllPermanentAddresses()
+}
 
 // fwdTestNetworkProtocol is a network-layer protocol that implements Address
 // resolution.
@@ -145,12 +157,13 @@ func (*fwdTestNetworkProtocol) Parse(pkt *PacketBuffer) (tcpip.TransportProtocol
 	return tcpip.TransportProtocolNumber(netHeader[protocolNumberOffset]), true, true
 }
 
-func (f *fwdTestNetworkProtocol) NewEndpoint(nicID tcpip.NICID, _ LinkAddressCache, _ NUDHandler, dispatcher TransportDispatcher, ep LinkEndpoint, _ *Stack) NetworkEndpoint {
+func (f *fwdTestNetworkProtocol) NewEndpoint(nic NetworkInterface, _ LinkAddressCache, _ NUDHandler, dispatcher TransportDispatcher, ep LinkEndpoint, _ *Stack) NetworkEndpoint {
 	return &fwdTestNetworkEndpoint{
-		nicID:      nicID,
-		proto:      f,
-		dispatcher: dispatcher,
-		ep:         ep,
+		AddressableEndpointState: NewAddressableEndpointState(),
+		nicID:                    nic.ID(),
+		proto:                    f,
+		dispatcher:               dispatcher,
+		ep:                       ep,
 	}
 }
 

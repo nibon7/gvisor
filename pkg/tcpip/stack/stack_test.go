@@ -68,10 +68,20 @@ const (
 // use the first three: destination address, source address, and transport
 // protocol. They're all one byte fields to simplify parsing.
 type fakeNetworkEndpoint struct {
+	*stack.AddressableEndpointState
+
 	nicID      tcpip.NICID
 	proto      *fakeNetworkProtocol
 	dispatcher stack.TransportDispatcher
 	ep         stack.LinkEndpoint
+}
+
+func (*fakeNetworkEndpoint) Enable() *tcpip.Error {
+	return nil
+}
+
+func (*fakeNetworkEndpoint) Disable() *tcpip.Error {
+	return nil
 }
 
 func (f *fakeNetworkEndpoint) MTU() uint32 {
@@ -156,7 +166,9 @@ func (*fakeNetworkEndpoint) WriteHeaderIncludedPacket(r *stack.Route, pkt *stack
 	return tcpip.ErrNotSupported
 }
 
-func (*fakeNetworkEndpoint) Close() {}
+func (f *fakeNetworkEndpoint) Close() {
+	f.AddressableEndpointState.RemoveAllPermanentAddresses()
+}
 
 // fakeNetworkProtocol is a network-layer protocol descriptor. It aggregates the
 // number of packets sent and received via endpoints of this protocol. The index
@@ -187,12 +199,13 @@ func (*fakeNetworkProtocol) ParseAddresses(v buffer.View) (src, dst tcpip.Addres
 	return tcpip.Address(v[srcAddrOffset : srcAddrOffset+1]), tcpip.Address(v[dstAddrOffset : dstAddrOffset+1])
 }
 
-func (f *fakeNetworkProtocol) NewEndpoint(nicID tcpip.NICID, _ stack.LinkAddressCache, _ stack.NUDHandler, dispatcher stack.TransportDispatcher, ep stack.LinkEndpoint, _ *stack.Stack) stack.NetworkEndpoint {
+func (f *fakeNetworkProtocol) NewEndpoint(nic stack.NetworkInterface, _ stack.LinkAddressCache, _ stack.NUDHandler, dispatcher stack.TransportDispatcher, ep stack.LinkEndpoint, _ *stack.Stack) stack.NetworkEndpoint {
 	return &fakeNetworkEndpoint{
-		nicID:      nicID,
-		proto:      f,
-		dispatcher: dispatcher,
-		ep:         ep,
+		AddressableEndpointState: stack.NewAddressableEndpointState(),
+		nicID:                    nic.ID(),
+		proto:                    f,
+		dispatcher:               dispatcher,
+		ep:                       ep,
 	}
 }
 
@@ -2213,7 +2226,7 @@ func TestNICAutoGenLinkLocalAddr(t *testing.T) {
 		nicName      string
 		autoGen      bool
 		linkAddr     tcpip.LinkAddress
-		iidOpts      stack.OpaqueInterfaceIdentifierOptions
+		iidOpts      ipv6.OpaqueInterfaceIdentifierOptions
 		shouldGen    bool
 		expectedAddr tcpip.Address
 	}{
@@ -2229,7 +2242,7 @@ func TestNICAutoGenLinkLocalAddr(t *testing.T) {
 			nicName:  "nic1",
 			autoGen:  false,
 			linkAddr: linkAddr1,
-			iidOpts: stack.OpaqueInterfaceIdentifierOptions{
+			iidOpts: ipv6.OpaqueInterfaceIdentifierOptions{
 				NICNameFromID: nicNameFunc,
 				SecretKey:     secretKey[:],
 			},
@@ -2274,7 +2287,7 @@ func TestNICAutoGenLinkLocalAddr(t *testing.T) {
 			nicName:  "nic1",
 			autoGen:  true,
 			linkAddr: linkAddr1,
-			iidOpts: stack.OpaqueInterfaceIdentifierOptions{
+			iidOpts: ipv6.OpaqueInterfaceIdentifierOptions{
 				NICNameFromID: nicNameFunc,
 				SecretKey:     secretKey[:],
 			},
@@ -2286,7 +2299,7 @@ func TestNICAutoGenLinkLocalAddr(t *testing.T) {
 		{
 			name:    "OIID Empty MAC and empty nicName",
 			autoGen: true,
-			iidOpts: stack.OpaqueInterfaceIdentifierOptions{
+			iidOpts: ipv6.OpaqueInterfaceIdentifierOptions{
 				NICNameFromID: nicNameFunc,
 				SecretKey:     secretKey[:1],
 			},
@@ -2298,7 +2311,7 @@ func TestNICAutoGenLinkLocalAddr(t *testing.T) {
 			nicName:  "test",
 			autoGen:  true,
 			linkAddr: "\x01\x02\x03",
-			iidOpts: stack.OpaqueInterfaceIdentifierOptions{
+			iidOpts: ipv6.OpaqueInterfaceIdentifierOptions{
 				NICNameFromID: nicNameFunc,
 				SecretKey:     secretKey[:2],
 			},
@@ -2310,7 +2323,7 @@ func TestNICAutoGenLinkLocalAddr(t *testing.T) {
 			nicName:  "test2",
 			autoGen:  true,
 			linkAddr: "\x01\x02\x03\x04\x05\x06",
-			iidOpts: stack.OpaqueInterfaceIdentifierOptions{
+			iidOpts: ipv6.OpaqueInterfaceIdentifierOptions{
 				NICNameFromID: nicNameFunc,
 				SecretKey:     secretKey[:3],
 			},
@@ -2322,7 +2335,7 @@ func TestNICAutoGenLinkLocalAddr(t *testing.T) {
 			nicName:  "test3",
 			autoGen:  true,
 			linkAddr: "\x00\x00\x00\x00\x00\x00",
-			iidOpts: stack.OpaqueInterfaceIdentifierOptions{
+			iidOpts: ipv6.OpaqueInterfaceIdentifierOptions{
 				NICNameFromID: nicNameFunc,
 			},
 			shouldGen:    true,
@@ -2336,10 +2349,11 @@ func TestNICAutoGenLinkLocalAddr(t *testing.T) {
 				autoGenAddrC: make(chan ndpAutoGenAddrEvent, 1),
 			}
 			opts := stack.Options{
-				NetworkProtocols:     []stack.NetworkProtocol{ipv6.NewProtocol()},
-				AutoGenIPv6LinkLocal: test.autoGen,
-				NDPDisp:              &ndpDisp,
-				OpaqueIIDOpts:        test.iidOpts,
+				NetworkProtocols: []stack.NetworkProtocol{ipv6.NewProtocolWithOptions(ipv6.Options{
+					AutoGenIPv6LinkLocal: test.autoGen,
+					NDPDisp:              &ndpDisp,
+					OpaqueIIDOpts:        test.iidOpts,
+				})},
 			}
 
 			e := channel.New(0, 1280, test.linkAddr)
@@ -2411,15 +2425,15 @@ func TestNoLinkLocalAutoGenForLoopbackNIC(t *testing.T) {
 
 	tests := []struct {
 		name          string
-		opaqueIIDOpts stack.OpaqueInterfaceIdentifierOptions
+		opaqueIIDOpts ipv6.OpaqueInterfaceIdentifierOptions
 	}{
 		{
 			name:          "IID From MAC",
-			opaqueIIDOpts: stack.OpaqueInterfaceIdentifierOptions{},
+			opaqueIIDOpts: ipv6.OpaqueInterfaceIdentifierOptions{},
 		},
 		{
 			name: "Opaque IID",
-			opaqueIIDOpts: stack.OpaqueInterfaceIdentifierOptions{
+			opaqueIIDOpts: ipv6.OpaqueInterfaceIdentifierOptions{
 				NICNameFromID: func(_ tcpip.NICID, nicName string) string {
 					return nicName
 				},
@@ -2430,9 +2444,10 @@ func TestNoLinkLocalAutoGenForLoopbackNIC(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			opts := stack.Options{
-				NetworkProtocols:     []stack.NetworkProtocol{ipv6.NewProtocol()},
-				AutoGenIPv6LinkLocal: true,
-				OpaqueIIDOpts:        test.opaqueIIDOpts,
+				NetworkProtocols: []stack.NetworkProtocol{ipv6.NewProtocolWithOptions(ipv6.Options{
+					AutoGenIPv6LinkLocal: true,
+					OpaqueIIDOpts:        test.opaqueIIDOpts,
+				})},
 			}
 
 			e := loopback.New()
@@ -2461,12 +2476,13 @@ func TestNICAutoGenAddrDoesDAD(t *testing.T) {
 	ndpDisp := ndpDispatcher{
 		dadC: make(chan ndpDADEvent),
 	}
-	ndpConfigs := stack.DefaultNDPConfigurations()
+	ndpConfigs := ipv6.DefaultNDPConfigurations()
 	opts := stack.Options{
-		NetworkProtocols:     []stack.NetworkProtocol{ipv6.NewProtocol()},
-		NDPConfigs:           ndpConfigs,
-		AutoGenIPv6LinkLocal: true,
-		NDPDisp:              &ndpDisp,
+		NetworkProtocols: []stack.NetworkProtocol{ipv6.NewProtocolWithOptions(ipv6.Options{
+			NDPConfigs:           ndpConfigs,
+			AutoGenIPv6LinkLocal: true,
+			NDPDisp:              &ndpDisp,
+		})},
 	}
 
 	e := channel.New(int(ndpConfigs.DupAddrDetectTransmits), 1280, linkAddr1)
@@ -2813,14 +2829,15 @@ func TestIPv6SourceAddressSelectionScopeAndSameAddress(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			e := channel.New(0, 1280, linkAddr1)
 			s := stack.New(stack.Options{
-				NetworkProtocols:   []stack.NetworkProtocol{ipv6.NewProtocol()},
+				NetworkProtocols: []stack.NetworkProtocol{ipv6.NewProtocolWithOptions(ipv6.Options{
+					NDPConfigs: ipv6.NDPConfigurations{
+						HandleRAs:                  true,
+						AutoGenGlobalAddresses:     true,
+						AutoGenTempGlobalAddresses: true,
+					},
+					NDPDisp: &ndpDispatcher{},
+				})},
 				TransportProtocols: []stack.TransportProtocol{udp.NewProtocol()},
-				NDPConfigs: stack.NDPConfigurations{
-					HandleRAs:                  true,
-					AutoGenGlobalAddresses:     true,
-					AutoGenTempGlobalAddresses: true,
-				},
-				NDPDisp: &ndpDispatcher{},
 			})
 			if err := s.CreateNIC(nicID, e); err != nil {
 				t.Fatalf("CreateNIC(%d, _) = %s", nicID, err)
@@ -3059,12 +3076,13 @@ func TestDoDADWhenNICEnabled(t *testing.T) {
 		dadC: make(chan ndpDADEvent),
 	}
 	opts := stack.Options{
-		NetworkProtocols: []stack.NetworkProtocol{ipv6.NewProtocol()},
-		NDPConfigs: stack.NDPConfigurations{
-			DupAddrDetectTransmits: dadTransmits,
-			RetransmitTimer:        retransmitTimer,
-		},
-		NDPDisp: &ndpDisp,
+		NetworkProtocols: []stack.NetworkProtocol{ipv6.NewProtocolWithOptions(ipv6.Options{
+			NDPConfigs: ipv6.NDPConfigurations{
+				DupAddrDetectTransmits: dadTransmits,
+				RetransmitTimer:        retransmitTimer,
+			},
+			NDPDisp: &ndpDisp,
+		})},
 	}
 
 	e := channel.New(dadTransmits, 1280, linkAddr1)
