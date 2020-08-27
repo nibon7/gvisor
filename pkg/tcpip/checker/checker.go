@@ -391,7 +391,41 @@ func Window(window uint16) TransportChecker {
 		}
 
 		if w := tcp.WindowSize(); w != window {
-			t.Errorf("Bad window, got 0x%x, want 0x%x", w, window)
+			t.Errorf("Bad window, got %d, want %d", w, window)
+		}
+	}
+}
+
+// WindowGreaterThanEq creates a checker that checks that the TCP window
+// is greater than or equal to the provided value.
+func WindowGreaterThanEq(window uint16) TransportChecker {
+	return func(t *testing.T, h header.Transport) {
+		t.Helper()
+
+		tcp, ok := h.(header.TCP)
+		if !ok {
+			return
+		}
+
+		if w := tcp.WindowSize(); w < window {
+			t.Errorf("Bad window, got %d, want > %d", w, window)
+		}
+	}
+}
+
+// WindowLessThanEq creates a checker that checks that the tcp window
+// is less than or equal to the provided value.
+func WindowLessThanEq(window uint16) TransportChecker {
+	return func(t *testing.T, h header.Transport) {
+		t.Helper()
+
+		tcp, ok := h.(header.TCP)
+		if !ok {
+			return
+		}
+
+		if w := tcp.WindowSize(); w > window {
+			t.Errorf("Bad window, got %d, want < %d", w, window)
 		}
 	}
 }
