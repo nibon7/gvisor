@@ -15,6 +15,7 @@
 package ip_test
 
 import (
+	"sync/atomic"
 	"testing"
 
 	"gvisor.dev/gvisor/pkg/tcpip"
@@ -247,10 +248,94 @@ func buildDummyStack(t *testing.T) *stack.Stack {
 	return s
 }
 
+var _ stack.NetworkInterface = (*testInterface)(nil)
+
+type testInterface struct {
+	disabled uint32
+}
+
+func (*testInterface) ID() tcpip.NICID {
+	return nicID
+}
+
+func (*testInterface) IsLoopback() bool {
+	return false
+}
+
+func (*testInterface) Name() string {
+	return ""
+}
+
+func (t *testInterface) Enabled() bool {
+	return atomic.LoadUint32(&t.disabled) == 0
+}
+
+func (t *testInterface) setEnabled(v bool) {
+	if v {
+		atomic.StoreUint32(&t.disabled, 0)
+	} else {
+		atomic.StoreUint32(&t.disabled, 1)
+	}
+}
+
+func TestEnableWhenNICDisabled(t *testing.T) {
+	tests := []struct {
+		name        string
+		newProtocol func() stack.NetworkProtocol
+	}{
+		{
+			name:        "IPv4",
+			newProtocol: ipv4.NewProtocol,
+		},
+		{
+			name:        "IPv6",
+			newProtocol: ipv6.NewProtocol,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var nic testInterface
+			nic.setEnabled(false)
+
+			p := test.newProtocol()
+			s := stack.New(stack.Options{
+				NetworkProtocols: []stack.NetworkProtocol{p},
+			})
+
+			// We pass nil for all parametes except the NetworkInterface and Stack
+			// since Enable only depends on these.
+			ep := p.NewEndpoint(&nic, nil, nil, nil, nil, s)
+
+			if ep.Enabled() {
+				t.Fatal("got ep.Enabled() = true, want = false")
+			}
+
+			// Attempting to enable the endpoint while the NIC is disabled should
+			// fail.
+			if err := ep.Enable(); err != nil {
+				t.Fatalf("ep.Enable(): %s", err)
+			}
+			if ep.Enabled() {
+				t.Fatal("got ep.Enabled() = true, want = false")
+			}
+
+			// Enabling the interface after the NIC has been enabled should succeed.
+			nic.setEnabled(true)
+			if err := ep.Enable(); err != nil {
+				t.Fatalf("ep.Enable(): %s", err)
+			}
+			if !ep.Enabled() {
+				t.Fatal("got ep.Enabled() = false, want = true")
+			}
+		})
+	}
+}
+
 func TestIPv4Send(t *testing.T) {
 	o := testObject{t: t, v4: true}
 	proto := ipv4.NewProtocol()
-	ep := proto.NewEndpoint(nicID, nil, nil, nil, &o, buildDummyStack(t))
+	ep := proto.NewEndpoint(&testInterface{}, nil, nil, nil, &o, buildDummyStack(t))
 	defer ep.Close()
 
 	// Allocate and initialize the payload view.
@@ -287,8 +372,12 @@ func TestIPv4Send(t *testing.T) {
 func TestIPv4Receive(t *testing.T) {
 	o := testObject{t: t, v4: true}
 	proto := ipv4.NewProtocol()
-	ep := proto.NewEndpoint(nicID, nil, nil, &o, nil, buildDummyStack(t))
+	ep := proto.NewEndpoint(&testInterface{}, nil, nil, &o, nil, buildDummyStack(t))
 	defer ep.Close()
+
+	if err := ep.Enable(); err != nil {
+		t.Fatalf("ep.Enable(): %s", err)
+	}
 
 	totalLen := header.IPv4MinimumSize + 30
 	view := buffer.NewView(totalLen)
@@ -357,8 +446,12 @@ func TestIPv4ReceiveControl(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			o := testObject{t: t}
 			proto := ipv4.NewProtocol()
-			ep := proto.NewEndpoint(nicID, nil, nil, &o, nil, buildDummyStack(t))
+			ep := proto.NewEndpoint(&testInterface{}, nil, nil, &o, nil, buildDummyStack(t))
 			defer ep.Close()
+
+			if err := ep.Enable(); err != nil {
+				t.Fatalf("ep.Enable(): %s", err)
+			}
 
 			const dataOffset = header.IPv4MinimumSize*2 + header.ICMPv4MinimumSize
 			view := buffer.NewView(dataOffset + 8)
@@ -418,8 +511,12 @@ func TestIPv4ReceiveControl(t *testing.T) {
 func TestIPv4FragmentationReceive(t *testing.T) {
 	o := testObject{t: t, v4: true}
 	proto := ipv4.NewProtocol()
-	ep := proto.NewEndpoint(nicID, nil, nil, &o, nil, buildDummyStack(t))
+	ep := proto.NewEndpoint(&testInterface{}, nil, nil, &o, nil, buildDummyStack(t))
 	defer ep.Close()
+
+	if err := ep.Enable(); err != nil {
+		t.Fatalf("ep.Enable(): %s", err)
+	}
 
 	totalLen := header.IPv4MinimumSize + 24
 
@@ -495,8 +592,12 @@ func TestIPv4FragmentationReceive(t *testing.T) {
 func TestIPv6Send(t *testing.T) {
 	o := testObject{t: t}
 	proto := ipv6.NewProtocol()
-	ep := proto.NewEndpoint(nicID, nil, nil, &o, channel.New(0, 1280, ""), buildDummyStack(t))
+	ep := proto.NewEndpoint(&testInterface{}, nil, nil, &o, channel.New(0, 1280, ""), buildDummyStack(t))
 	defer ep.Close()
+
+	if err := ep.Enable(); err != nil {
+		t.Fatalf("ep.Enable(): %s", err)
+	}
 
 	// Allocate and initialize the payload view.
 	payload := buffer.NewView(100)
@@ -532,8 +633,12 @@ func TestIPv6Send(t *testing.T) {
 func TestIPv6Receive(t *testing.T) {
 	o := testObject{t: t}
 	proto := ipv6.NewProtocol()
-	ep := proto.NewEndpoint(nicID, nil, nil, &o, nil, buildDummyStack(t))
+	ep := proto.NewEndpoint(&testInterface{}, nil, nil, &o, nil, buildDummyStack(t))
 	defer ep.Close()
+
+	if err := ep.Enable(); err != nil {
+		t.Fatalf("ep.Enable(): %s", err)
+	}
 
 	totalLen := header.IPv6MinimumSize + 30
 	view := buffer.NewView(totalLen)
@@ -611,8 +716,12 @@ func TestIPv6ReceiveControl(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			o := testObject{t: t}
 			proto := ipv6.NewProtocol()
-			ep := proto.NewEndpoint(nicID, nil, nil, &o, nil, buildDummyStack(t))
+			ep := proto.NewEndpoint(&testInterface{}, nil, nil, &o, nil, buildDummyStack(t))
 			defer ep.Close()
+
+			if err := ep.Enable(); err != nil {
+				t.Fatalf("ep.Enable(): %s", err)
+			}
 
 			dataOffset := header.IPv6MinimumSize*2 + header.ICMPv6MinimumSize
 			if c.fragmentOffset != nil {
