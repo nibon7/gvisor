@@ -102,6 +102,11 @@ const (
 	// the first fragment must carry when an IPv4 packet is fragmented.
 	MinIPFragmentPayloadSize = 8
 
+	// IPv4FragmentOffsetBytesPerUnit is the unit size of the Fragment Offset
+	// field. That is, given a Fragment Offset of 2, the fragment's payload starts
+	// at the 16th byte in the reassembled packet.
+	IPv4FragmentOffsetBytesPerUnit = 8
+
 	// IPv4AddressSize is the size, in bytes, of an IPv4 address.
 	IPv4AddressSize = 4
 

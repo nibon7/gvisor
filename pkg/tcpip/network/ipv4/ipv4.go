@@ -194,7 +194,7 @@ func (e *endpoint) writePacketFragments(r *stack.Route, gso *stack.GSO, mtu int,
 		}
 		h.SetChecksum(0)
 		h.SetChecksum(^h.CalculateChecksum())
-		offset += copied
+		offset += (copied / header.IPv4FragmentOffsetBytesPerUnit)
 
 		// Send out the fragment.
 		if err := e.linkEP.WritePacket(r, gso, ProtocolNumber, fragPkt); err != nil {

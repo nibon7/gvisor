@@ -144,7 +144,7 @@ func compareFragments(t *testing.T, packets []*stack.PacketBuffer, sourcePacketI
 			sourceCopy.SetFlagsFragmentOffset(sourceCopy.Flags()&^header.IPv4FlagMoreFragments, offset)
 		}
 		reassembledPayload = append(reassembledPayload, ip.Payload()...)
-		offset += ip.TotalLength() - uint16(ip.HeaderLength())
+		offset += (ip.TotalLength() - uint16(ip.HeaderLength())) / header.IPv4FragmentOffsetBytesPerUnit
 		// Clear out the checksum and length from the ip because we can't compare
 		// it.
 		sourceCopy.SetTotalLength(uint16(len(ip)))
