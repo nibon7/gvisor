@@ -27,6 +27,8 @@ import (
 // allowedSyscalls is the set of syscalls executed by the Sentry to the host OS.
 var allowedSyscalls = seccomp.SyscallRules{
 	syscall.SYS_CLOCK_GETTIME: {},
+	// parent_tidptr and child_tidptr are always 0 because neither
+	// CLONE_PARENT_SETTID nor CLONE_CHILD_SETTID are used.
 	syscall.SYS_CLONE: []seccomp.Rule{
 		{
 			seccomp.EqualTo(
@@ -36,6 +38,10 @@ var allowedSyscalls = seccomp.SyscallRules{
 					syscall.CLONE_SIGHAND |
 					syscall.CLONE_SYSVSEM |
 					syscall.CLONE_THREAD),
+			seccomp.MatchAny{}, // newsp
+			seccomp.EqualTo(0), // parent_tidptr
+			seccomp.EqualTo(0), // child_tidptr
+			seccomp.MatchAny{}, // tls
 		},
 	},
 	syscall.SYS_CLOSE: {},
