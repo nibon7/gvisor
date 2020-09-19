@@ -28,6 +28,7 @@
 #include "test/util/file_descriptor.h"
 #include "test/util/posix_error.h"
 #include "test/util/temp_path.h"
+#include "test/util/test_util.h"
 #include "test/util/thread_util.h"
 
 namespace gvisor {
@@ -750,6 +751,19 @@ PosixErrorOr<int> SendMsg(int sock, msghdr* msg, char buf[], int buf_size) {
 
   int ret;
   RETURN_ERROR_IF_SYSCALL_FAIL(ret = RetryEINTR(sendmsg)(sock, msg, 0));
+  return ret;
+}
+
+PosixErrorOr<int> RecvMsgTimeout(int sock, char buf[], int buf_size,
+                                 int timeout) {
+  fd_set rfd;
+  struct timeval to = {.tv_sec = timeout, .tv_usec = 0};
+  FD_ZERO(&rfd);
+  FD_SET(sock, &rfd);
+
+  int ret = 0;
+  RETURN_ERROR_IF_SYSCALL_FAIL(ret = select(1, &rfd, NULL, NULL, &to));
+  RETURN_ERROR_IF_SYSCALL_FAIL(ret = recv(sock, buf, buf_size, MSG_DONTWAIT));
   return ret;
 }
 
